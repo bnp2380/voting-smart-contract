@@ -3,9 +3,307 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+    <title>Poll Creator - Vote Contract</title>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <h1>Vote Contract</h1>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Create Poll</h1>
+            <div>
+                <button class="wallet-btn" id="connectWallet">Connect Wallet</button>
+                <div class="status" id="walletStatus"></div>
+            </div>
+        </div>
+
+        <div class="message" id="message"></div>
+
+        <form id="pollForm">
+            <div class="form-group">
+                <label for="question">Poll Question *</label>
+                <input 
+                    type="text" 
+                    id="question" 
+                    placeholder="e.g., What's your favorite programming language?" 
+                    required
+                >
+            </div>
+
+            <div class="options-section">
+                <label>Poll Options (minimum 2) *</label>
+                <div id="optionsContainer"></div>
+                <button type="button" class="add-option-btn" id="addOptionBtn">+ Add Option</button>
+            </div>
+
+            <div class="form-group">
+                <label for="startTime">Start Time *</label>
+                <input 
+                    type="datetime-local" 
+                    id="startTime" 
+                    required
+                >
+            </div>
+
+            <div class="form-group">
+                <label for="endTime">End Time *</label>
+                <input 
+                    type="datetime-local" 
+                    id="endTime" 
+                    required
+                >
+            </div>
+
+            <button type="submit" class="submit-btn" id="submitBtn">Create Poll</button>
+        </form>
+    </div>
+
+    <script type="module">
+        import { ethers } from 'https://cdn.jsdelivr.net/npm/ethers@6.13.0/+esm';
+
+        // Contract ABI for PollFactory
+        const POLL_FACTORY_ABI = [
+            {
+                "type": "event",
+                "name": "PollCreated",
+                "inputs": [
+                    {"name": "poll", "type": "address", "indexed": true},
+                    {"name": "creator", "type": "address", "indexed": true},
+                    {"name": "question", "type": "string", "indexed": false}
+                ]
+            },
+            {
+                "type": "function",
+                "name": "createPoll",
+                "inputs": [
+                    {"name": "question", "type": "string"},
+                    {"name": "options", "type": "string[]"},
+                    {"name": "startTime", "type": "uint64"},
+                    {"name": "endTime", "type": "uint64"}
+                ],
+                "outputs": [{"name": "pollAddress", "type": "address"}],
+                "stateMutability": "nonpayable"
+            }
+        ];
+
+        // Replace with your deployed PollFactory address
+        const POLL_FACTORY_ADDRESS = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"; // TODO: Set this to your deployed contract address
+
+        let provider;
+        let signer;
+        let isConnected = false;
+
+        // Initialize with 2 default options
+        initializeOptions();
+
+        // Event Listeners
+        document.getElementById('connectWallet').addEventListener('click', connectWallet);
+        document.getElementById('addOptionBtn').addEventListener('click', addOption);
+        document.getElementById('pollForm').addEventListener('submit', submitPoll);
+
+        // Auto-connect wallet on page load
+        autoConnectWallet();
+
+        function initializeOptions() {
+            const container = document.getElementById('optionsContainer');
+            container.innerHTML = '';
+            for (let i = 0; i < 2; i++) {
+                addOptionInput(i === 1);
+            }
+        }
+
+        async function autoConnectWallet() {
+            try {
+                if (!window.ethereum) return;
+                
+                // Check if there are any connected accounts
+                const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+                
+                if (accounts.length > 0) {
+                    provider = new ethers.BrowserProvider(window.ethereum);
+                    signer = await provider.getSigner();
+                    isConnected = true;
+                    updateWalletStatus(accounts[0]);
+                }
+            } catch (error) {
+                console.error('Auto-connect error:', error);
+                // Silently fail - user can manually connect if needed
+            }
+        }
+
+        function addOption(e) {
+            e.preventDefault();
+            addOptionInput();
+        }
+
+        function addOptionInput(scrollIntoView = true) {
+            const container = document.getElementById('optionsContainer');
+            const index = container.children.length;
+            
+            const group = document.createElement('div');
+            group.className = 'option-input-group';
+            group.innerHTML = `
+                <input 
+                    type="text" 
+                    placeholder="Option ${index + 1}" 
+                    class="option-input"
+                    required
+                >
+                ${index >= 2 ? `<button type="button" class="remove-option-btn">Remove</button>` : ''}
+            `;
+
+            if (index >= 2) {
+                group.querySelector('.remove-option-btn').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    group.remove();
+                });
+            }
+
+            container.appendChild(group);
+            if (scrollIntoView) {
+                group.scrollIntoView({ behavior: 'smooth' });
+            }
+        }
+
+        async function connectWallet() {
+            try {
+                if (!window.ethereum) {
+                    showMessage('Please install MetaMask or another Ethereum wallet', 'error');
+                    return;
+                }
+
+                provider = new ethers.BrowserProvider(window.ethereum);
+                const accounts = await provider.send('eth_requestAccounts', []);
+                signer = await provider.getSigner();
+                isConnected = true;
+
+                updateWalletStatus(accounts[0]);
+                showMessage('Wallet connected successfully!', 'success');
+            } catch (error) {
+                console.error('Connection error:', error);
+                showMessage('Failed to connect wallet: ' + error.message, 'error');
+            }
+        }
+
+        function updateWalletStatus(address) {
+            const status = document.getElementById('walletStatus');
+            const btn = document.getElementById('connectWallet');
+            
+            const shortAddress = address.substring(0, 6) + '...' + address.substring(address.length - 4);
+            status.textContent = shortAddress;
+            btn.classList.add('connected');
+            btn.textContent = 'Wallet Connected';
+            btn.disabled = true;
+        }
+
+        async function submitPoll(e) {
+            e.preventDefault();
+
+            if (!isConnected) {
+                showMessage('Please connect your wallet first', 'error');
+                return;
+            }
+
+            if (!POLL_FACTORY_ADDRESS.startsWith('0x') || POLL_FACTORY_ADDRESS === '0x...') {
+                showMessage('Please set the PollFactory contract address in the code', 'error');
+                return;
+            }
+
+            const submitBtn = document.getElementById('submitBtn');
+            const originalText = submitBtn.textContent;
+
+            try {
+                submitBtn.disabled = true;
+                showMessage('', 'info');
+
+                const question = document.getElementById('question').value.trim();
+                const options = Array.from(document.querySelectorAll('.option-input'))
+                    .map(input => input.value.trim())
+                    .filter(opt => opt.length > 0);
+                
+                const startTime = Math.floor(new Date(document.getElementById('startTime').value).getTime() / 1000);
+                const endTime = Math.floor(new Date(document.getElementById('endTime').value).getTime() / 1000);
+
+                // Validation
+                if (!question) {
+                    showMessage('Please enter a poll question', 'error');
+                    submitBtn.disabled = false;
+                    return;
+                }
+
+                if (options.length < 2) {
+                    showMessage('Please add at least 2 options', 'error');
+                    submitBtn.disabled = false;
+                    return;
+                }
+
+                if (endTime <= startTime) {
+                    showMessage('End time must be after start time', 'error');
+                    submitBtn.disabled = false;
+                    return;
+                }
+
+                showMessage('<span class="spinner"></span>Creating poll...', 'info');
+                submitBtn.textContent = '⏳ Creating...';
+
+                // Create contract instance
+                const factory = new ethers.Contract(POLL_FACTORY_ADDRESS, POLL_FACTORY_ABI, signer);
+
+                // Call createPoll
+                const tx = await factory.createPoll(question, options, startTime, endTime);
+                
+                showMessage('<span class="spinner"></span>Waiting for confirmation...', 'info');
+                
+                const receipt = await tx.wait();
+
+                // Extract poll address from event logs
+                let pollAddress = null;
+                const iface = new ethers.Interface(POLL_FACTORY_ABI);
+                
+                for (const log of receipt.logs) {
+                    try {
+                        const event = iface.parseLog(log);
+                        if (event && event.name === 'PollCreated') {
+                            pollAddress = event.args[0]; // poll address is first argument
+                            break;
+                        }
+                    } catch (e) {
+                        // Continue if log parsing fails
+                    }
+                }
+
+                if (pollAddress) {
+                    const voteLink = `poll?pollAddress=${pollAddress}`;
+                    const successMessage = `✓ Poll created successfully!<br>📋 Poll Address: <strong style="font-family: monospace; word-break: break-all;">${pollAddress}</strong><br><a href="${voteLink}" style="display: inline-block; margin-top: 12px; padding: 10px 20px; background: #667eea; color: white; text-decoration: none; border-radius: 6px; font-weight: 600; transition: background 0.3s ease;" onmouseover="this.style.background='#5568d3'" onmouseout="this.style.background='#667eea'">👉 Vote on this Poll</a>`;
+                    showMessage(successMessage, 'success');
+                } else {
+                    showMessage(`✓ Poll created successfully! Transaction: ${receipt.hash}`, 'success');
+                }
+                
+                document.getElementById('pollForm').reset();
+                initializeOptions();
+
+            } catch (error) {
+                console.error('Error:', error);
+                showMessage('Error: ' + (error.reason || error.message), 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalText;
+            }
+        }
+
+        function showMessage(msg, type) {
+            const messageEl = document.getElementById('message');
+            messageEl.innerHTML = msg;
+            messageEl.className = `message ${type}`;
+            if (msg) {
+                messageEl.classList.add('show');
+            }
+        }
+
+        // Set minimum datetime to now
+        const now = new Date();
+        now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+        document.getElementById('startTime').min = now.toISOString().slice(0, 16);
+    </script>
 </body>
 </html>

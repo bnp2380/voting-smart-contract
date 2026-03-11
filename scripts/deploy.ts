@@ -1,4 +1,5 @@
 import hre, { network } from "hardhat";
+import fs from "fs";
 
 const { ethers } = await network.connect();
 
@@ -11,7 +12,6 @@ async function main() {
   console.log("PollFactory contract deployed to:", contractAddress);
   
   // Save the contract address for frontend use
-  const fs = require("fs");
   fs.writeFileSync(
     "frontend/contract-address.json",
     JSON.stringify({ address: contractAddress }, null, 2)

@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vote on Poll - Vote Contract</title>
+    <link rel="stylesheet" href="poll-styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗳️ Vote on Poll</h1>
+            <div>
+                <button class="wallet-btn" id="connectWallet">Connect Wallet</button>
+                <div class="status" id="walletStatus"></div>
+            </div>
+        </div>
+
+        <div class="message" id="message"></div>
+
+        <div class="load-poll-section">
+            <h3 style="margin-bottom: 12px; color: #333; font-size: 16px;">Load a Poll</h3>
+            <div class="address-input-group">
+                <input 
+                    type="text" 
+                    id="pollAddress" 
+                    placeholder="Enter poll contract address (0x...)"
+                >
+                <button class="load-btn" id="loadBtn">Load Poll</button>
+            </div>
+        </div>
+
+        <div class="poll-section" id="pollSection">
+            <div class="poll-header">
+                <div class="poll-question" id="pollQuestion"></div>
+                
+                <div class="poll-timer">
+                    <div class="timer-item">
+                        <div class="timer-label">Starts</div>
+                        <div class="timer-value" id="startTime"></div>
+                    </div>
+                    <div class="timer-item">
+                        <div class="timer-label">Ends</div>
+                        <div class="timer-value" id="endTime"></div>
+                    </div>
+                    <div class="timer-item">
+                        <div class="timer-label">Status</div>
+                        <div class="timer-value" id="pollStatusValue">Loading...</div>
+                    </div>
+                    <div class="timer-item">
+                        <div class="timer-label">Time Remaining</div>
+                        <div class="timer-value countdown" id="countdownTimer">--:--:--</div>
+                    </div>
+                </div>
+
+
+                <div id="userVoteMessage" style="display: none; margin-top: 15px;" class="user-vote-message">
+                    ✓ You have already voted. Results update as others vote.
+                </div>
+            </div>
+
+            <div class="results-summary">
+                <h3>Poll Results</h3>
+                <div class="vote-stat">
+                    <span class="vote-stat-label">Total Votes</span>
+                    <span class="vote-stat-value" id="totalVotes">0</span>
+                </div>
+                <div class="vote-stat">
+                    <span class="vote-stat-label">Options</span>
+                    <span class="vote-stat-value" id="optionCount">0</span>
+                </div>
+            </div>
+
+            <div class="options-container" id="optionsContainer"></div>
+
+            <button class="refresh-btn" id="refreshBtn">🔄 Refresh Results</button>
+        </div>
+
+        <div class="no-poll" id="noPoll">
+            <p>Enter a poll contract address to get started</p>
+        </div>
+    </div>
+
+    <script type="module">
+        import { ethers } from 'https://cdn.jsdelivr.net/npm/ethers@6.13.0/+esm';
+
+        // Poll Contract ABI
+        const POLL_ABI = [
+            {
+                "type": "function",
+                "name": "question",
+                "outputs": [{"type": "string"}],
+                "stateMutability": "view"
+            },
+            {
+                "type": "function",
+                "name": "startTime",
+                "outputs": [{"type": "uint64"}],
+                "stateMutability": "view"
+            },
+            {
+                "type": "function",
+                "name": "endTime",
+                "outputs": [{"type": "uint64"}],
+                "stateMutability": "view"
+            },
+            {
+                "type": "function",
+                "name": "getOptions",
+                "outputs": [{"type": "string[]"}],
+                "stateMutability": "view"
+            },
+            {
+                "type": "function",
+                "name": "getResults",
+                "outputs": [{"type": "uint32[]"}],
+                "stateMutability": "view"
+            },
+            {
+                "type": "function",
+                "name": "vote",
+                "inputs": [{"name": "optionId", "type": "uint256"}],
+                "stateMutability": "nonpayable"
+            },
+            {
+                "type": "function",
+                "name": "isActive",
+                "outputs": [{"type": "bool"}],
+                "stateMutability": "view"
+            },
+            {
+                "type": "function",
+                "name": "hasUserVoted",
+                "inputs": [{"name": "user", "type": "address"}],
+                "outputs": [{"type": "bool"}],
+                "stateMutability": "view"
+            }
+        ];
+
+        let provider;
+        let signer;
+        let isConnected = false;
+        let currentPollAddress = null;
+        let userAddress = null;
+        let pollContract = null;
+        let countdownInterval = null;
+        let pollEndTime = null;
+
+        // Check for poll address in URL parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const pollAddressFromUrl = urlParams.get('pollAddress');
+
+        // Event Listeners
+        document.getElementById('connectWallet').addEventListener('click', connectWallet);
+        document.getElementById('loadBtn').addEventListener('click', loadPoll);
+        document.getElementById('pollAddress').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') loadPoll();
+        });
+        document.getElementById('refreshBtn').addEventListener('click', refreshPollData);
+
+        // Auto-connect wallet on page load
+        autoConnectWallet();
+
+        async function connectWallet() {
+            try {
+                if (!window.ethereum) {
+                    showMessage('Please install MetaMask or another Ethereum wallet', 'error');
+                    return;
+                }
+
+                provider = new ethers.BrowserProvider(window.ethereum);
+                const accounts = await provider.send('eth_requestAccounts', []);
+                signer = await provider.getSigner();
+                userAddress = accounts[0];
+                isConnected = true;
+
+                updateWalletStatus(accounts[0]);
+                showMessage('Wallet connected successfully!', 'success');
+                
+                // Auto-load poll if address is in URL
+                if (pollAddressFromUrl) {
+                    setTimeout(() => loadPollFromUrl(), 500);
+                }
+            } catch (error) {
+                console.error('Connection error:', error);
+                showMessage('Failed to connect wallet: ' + error.message, 'error');
+            }
+        }
+
+        async function autoConnectWallet() {
+            try {
+                if (!window.ethereum) return;
+                
+                // Check if there are any connected accounts
+                const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+                
+                if (accounts.length > 0) {
+                    provider = new ethers.BrowserProvider(window.ethereum);
+                    signer = await provider.getSigner();
+                    userAddress = accounts[0];
+                    isConnected = true;
+                    updateWalletStatus(accounts[0]);
+                    
+                    // Auto-load poll if address is in URL
+                    if (pollAddressFromUrl) {
+                        setTimeout(() => loadPollFromUrl(), 500);
+                    }
+                }
+            } catch (error) {
+                console.error('Auto-connect error:', error);
+                // Silently fail - user can manually connect if needed
+            }
+        }
+
+        function updateWalletStatus(address) {
+            const status = document.getElementById('walletStatus');
+            const btn = document.getElementById('connectWallet');
+            
+            const shortAddress = address.substring(0, 6) + '...' + address.substring(address.length - 4);
+            status.textContent = shortAddress;
+            btn.classList.add('connected');
+            btn.textContent = 'Wallet Connected';
+            btn.disabled = true;
+        }
+
+        async function loadPollFromUrl() {
+            if (!pollAddressFromUrl) return;
+            document.getElementById('pollAddress').value = pollAddressFromUrl;
+            await loadPoll();
+        }
+
+        async function loadPoll() {
+            try {
+                if (!isConnected) {
+                    showMessage('Please connect your wallet first', 'error');
+                    return;
+                }
+
+                const address = document.getElementById('pollAddress').value.trim();
+                
+                if (!ethers.isAddress(address)) {
+                    showMessage('Please enter a valid contract address', 'error');
+                    return;
+                }
+
+                const loadBtn = document.getElementById('loadBtn');
+                loadBtn.disabled = true;
+                loadBtn.textContent = '⏳ Loading...';
+                showMessage('', 'info');
+
+                currentPollAddress = address;
+                pollContract = new ethers.Contract(address, POLL_ABI, provider);
+
+                await displayPoll();
+
+                loadBtn.disabled = false;
+                loadBtn.textContent = 'Load Poll';
+                
+                // Hide the load poll section after successful load
+                document.querySelector('.load-poll-section').style.display = 'none';
+            } catch (error) {
+                console.error('Error:', error);
+                showMessage('Error loading poll: ' + (error.reason || error.message), 'error');
+                document.getElementById('loadBtn').disabled = false;
+                document.getElementById('loadBtn').textContent = 'Load Poll';
+            }
+        }
+
+        async function displayPoll() {
+            try {
+                console.log('Fetching poll data from contract...');
+                const question = await pollContract.question();
+                const options = await pollContract.getOptions();
+                const results = await pollContract.getResults();
+                const startTime = await pollContract.startTime();
+                const endTime = await pollContract.endTime();
+                const isActive = await pollContract.isActive();
+                const hasVoted = await pollContract.hasUserVoted(userAddress);
+
+                // Display question
+                document.getElementById('pollQuestion').textContent = question;
+
+                // Display times
+                document.getElementById('startTime').textContent = formatDateTime(Number(startTime));
+                document.getElementById('endTime').textContent = formatDateTime(Number(endTime));
+
+                // Store end time for countdown and start countdown timer
+                pollEndTime = Number(endTime);
+                startCountdownTimer();
+
+                // Display status
+                const statusValue = document.getElementById('pollStatusValue');
+                
+                const now = Math.floor(Date.now() / 1000);
+                let status = '';
+                let statusClass = '';
+
+                if (now < Number(startTime)) {
+                    status = 'Not Started Yet';
+                    statusClass = 'pending';
+                } else if (now > Number(endTime)) {
+                    status = 'Voting Ended';
+                    statusClass = 'ended';
+                } else {
+                    status = 'Active';
+                    statusClass = 'active';
+                }
+
+                statusValue.textContent = status;
+
+                // Display results summary
+                const totalVotes = results.reduce((a, b) => a + Number(b), 0);
+                document.getElementById('totalVotes').textContent = totalVotes;
+                document.getElementById('optionCount').textContent = options.length;
+
+                // Display user vote message
+                const userVoteMsg = document.getElementById('userVoteMessage');
+                if (hasVoted) {
+                    userVoteMsg.style.display = 'block';
+                } else {
+                    userVoteMsg.style.display = 'none';
+                }
+
+                // Display options
+                const container = document.getElementById('optionsContainer');
+                container.innerHTML = '';
+
+                const maxVotes = Math.max(...results.map(v => Number(v)), 1);
+
+                options.forEach((option, index) => {
+                    const votes = Number(results[index]);
+                    const percentage = totalVotes > 0 ? Math.round((votes / totalVotes) * 100) : 0;
+                    
+                    const optionDiv = document.createElement('div');
+                    optionDiv.className = `option-item ${hasVoted && votes > 0 ? 'voted' : ''}`;
+                    
+                    optionDiv.innerHTML = `
+                        <div class="option-header">
+                            <span class="option-text">${option}</span>
+                            <span class="option-vote-count">${votes} vote${votes !== 1 ? 's' : ''}</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" style="width: ${(votes / maxVotes) * 100}%">
+                                ${percentage > 10 ? `<span class="progress-text">${percentage}%</span>` : ''}
+                            </div>
+                        </div>
+                        ${!hasVoted && isActive ? `<button class="vote-btn" data-option="${index}">👍 Vote for this option</button>` : ''}
+                    `;
+
+                    if (!hasVoted && isActive) {
+                        const voteBtn = optionDiv.querySelector('.vote-btn');
+                        voteBtn.addEventListener('click', () => castVote(index));
+                    }
+
+                    container.appendChild(optionDiv);
+                });
+
+                // Show poll section
+                document.getElementById('noPoll').style.display = 'none';
+                document.getElementById('pollSection').classList.add('active');
+
+                // Update every 5 seconds
+                setInterval(refreshPollData, 5000);
+
+            } catch (error) {
+                console.error('Error displaying poll:', error);
+                throw error;
+            }
+        }
+
+        async function castVote(optionId) {
+            try {
+                if (!signer) {
+                    showMessage('Please connect your wallet first', 'error');
+                    return;
+                }
+
+                showMessage('<span class="spinner"></span>Casting vote...', 'info');
+                
+                const pollContractWithSigner = new ethers.Contract(currentPollAddress, POLL_ABI, signer);
+                const tx = await pollContractWithSigner.vote(optionId);
+                
+                showMessage('<span class="spinner"></span>Waiting for confirmation...', 'info');
+                const receipt = await tx.wait();
+
+                showMessage('✓ Vote cast successfully!', 'success');
+                
+                // Refresh poll data after vote
+                await refreshPollData();
+
+            } catch (error) {
+                console.error('Vote error:', error);
+                showMessage('Error casting vote: ' + (error.reason || error.message), 'error');
+            }
+        }
+
+        async function refreshPollData() {
+            try {
+                if (!pollContract) return;
+                await displayPoll();
+            } catch (error) {
+                console.error('Error refreshing poll:', error);
+            }
+        }
+
+        function startCountdownTimer() {
+            // Clear any existing interval
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+            }
+
+            // Update immediately
+            updateCountdownDisplay();
+
+            // Update every second
+            countdownInterval = setInterval(updateCountdownDisplay, 1000);
+        }
+
+        function updateCountdownDisplay() {
+            if (!pollEndTime) return;
+
+            const now = Math.floor(Date.now() / 1000);
+            const remainingSeconds = pollEndTime - now;
+            const timerElement = document.getElementById('countdownTimer');
+
+            if (!timerElement) return;
+
+            if (remainingSeconds <= 0) {
+                timerElement.textContent = '00:00:00';
+                timerElement.className = 'timer-value countdown ended';
+                clearInterval(countdownInterval);
+                return;
+            }
+
+            // Calculate hours, minutes, seconds
+            const hours = Math.floor(remainingSeconds / 3600);
+            const minutes = Math.floor((remainingSeconds % 3600) / 60);
+            const seconds = remainingSeconds % 60;
+
+            const formattedTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            timerElement.textContent = formattedTime;
+
+            // Update styling based on time remaining
+            timerElement.className = 'timer-value countdown';
+            if (remainingSeconds <= 60) {
+                timerElement.classList.add('danger');
+            } else if (remainingSeconds <= 300) {
+                timerElement.classList.add('warning');
+            }
+        }
+
+        function formatDateTime(timestamp) {
+            const date = new Date(timestamp * 1000);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const seconds = String(date.getSeconds()).padStart(2, '0');
+            
+            return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+        }
+
+        function showMessage(msg, type) {
+            const messageEl = document.getElementById('message');
+            messageEl.innerHTML = msg;
+            messageEl.className = `message ${type}`;
+            if (msg) {
+                messageEl.classList.add('show');
+            }
+        }
+    </script>
+</body>
+</html>
